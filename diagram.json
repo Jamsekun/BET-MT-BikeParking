@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "author": "James Balolong",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": -0.18, "left": 4.57, "attrs": {} },
+    {
+      "type": "wokwi-led",
+      "id": "led1",
+      "top": 140.4,
+      "left": 128.6,
+      "attrs": { "color": "red" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led2",
+      "top": 150,
+      "left": 186.2,
+      "attrs": { "color": "green" }
+    },
+    {
+      "type": "wokwi-led",
+      "id": "led3",
+      "top": 130.8,
+      "left": 157.4,
+      "attrs": { "color": "blue" }
+    },
+    { "type": "wokwi-membrane-keypad", "id": "keypad1", "top": -290, "left": 15.2, "attrs": {} },
+    {
+      "type": "board-ssd1306",
+      "id": "oled1",
+      "top": -275.26,
+      "left": -95.77,
+      "attrs": { "i2cAddress": "0x3c" }
+    },
+    { "type": "wokwi-vcc", "id": "vcc1", "top": -344.84, "left": -86.4, "attrs": {} },
+    { "type": "wokwi-gnd", "id": "gnd1", "top": -288, "left": -183, "attrs": {} },
+    { "type": "wokwi-dip-switch-8", "id": "sw1", "top": -166.5, "left": -84.9, "attrs": {} },
+    { "type": "chip-qrcodescanner", "id": "chip1", "top": -123.78, "left": 283.2, "attrs": {} },
+    {
+      "type": "wokwi-text",
+      "id": "text1",
+      "top": -67.2,
+      "left": -153.6,
+      "attrs": { "text": "Parking spaces" }
+    },
+    {
+      "type": "wokwi-pushbutton",
+      "id": "btn1",
+      "top": -176.2,
+      "left": 297.6,
+      "attrs": { "color": "green", "xray": "1", "bounce": "0" }
+    },
+    { "type": "wokwi-vcc", "id": "vcc2", "top": -152.84, "left": 547.2, "attrs": {} },
+    { "type": "wokwi-gnd", "id": "gnd2", "top": -38.4, "left": 287.4, "attrs": {} },
+    {
+      "type": "wokwi-text",
+      "id": "text2",
+      "top": -211.2,
+      "left": 355.2,
+      "attrs": { "text": "QR_CODE GENERATOR" }
+    }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp:GND.4", "led1:C", "black", [ "h0" ] ],
+    [ "esp:GND.4", "led3:C", "black", [ "h0" ] ],
+    [ "esp:GND.4", "led2:C", "black", [ "h0" ] ],
+    [ "led1:A", "esp:21", "green", [ "v0" ] ],
+    [ "led3:A", "esp:20", "green", [ "v0" ] ],
+    [ "led2:A", "esp:19", "green", [ "v0" ] ],
+    [ "oled1:SCL", "esp:9", "yellow", [ "v-19.2", "h67.5", "v451.2" ] ],
+    [ "oled1:SDA", "esp:8", "yellow", [ "h67.27", "v403.2" ] ],
+    [ "vcc1:VCC", "oled1:VCC", "red", [ "v0", "h96" ] ],
+    [ "gnd1:GND", "oled1:GND", "black", [ "v-9.6", "h76.8" ] ],
+    [ "esp:35", "keypad1:R1", "green", [ "h0" ] ],
+    [ "esp:36", "keypad1:R2", "green", [ "h0" ] ],
+    [ "esp:37", "keypad1:R3", "green", [ "h0" ] ],
+    [ "esp:38", "keypad1:R4", "green", [ "h0" ] ],
+    [ "esp:39", "keypad1:C1", "green", [ "h0" ] ],
+    [ "esp:40", "keypad1:C2", "green", [ "h0" ] ],
+    [ "esp:41", "keypad1:C3", "green", [ "h0" ] ],
+    [ "esp:42", "keypad1:C4", "green", [ "h0" ] ],
+    [ "sw1:8a", "esp:4", "green", [ "v0" ] ],
+    [ "sw1:7a", "esp:5", "green", [ "v0" ] ],
+    [ "sw1:6a", "esp:6", "green", [ "v0" ] ],
+    [ "sw1:5a", "esp:7", "green", [ "v0" ] ],
+    [ "sw1:4a", "esp:15", "green", [ "v0" ] ],
+    [ "sw1:3a", "esp:16", "green", [ "v0" ] ],
+    [ "sw1:2a", "esp:17", "green", [ "v0" ] ],
+    [ "sw1:1a", "esp:18", "green", [ "v0" ] ],
+    [ "esp:GND.2", "sw1:8b", "black", [ "v-19.2", "h-96", "v-173.1" ] ],
+    [ "sw1:8b", "sw1:7b", "black", [ "h0" ] ],
+    [ "sw1:1b", "sw1:2b", "green", [ "v0" ] ],
+    [ "sw1:2b", "sw1:3b", "green", [ "v0" ] ],
+    [ "sw1:3b", "sw1:4b", "green", [ "v0" ] ],
+    [ "sw1:4b", "sw1:5b", "green", [ "v0" ] ],
+    [ "sw1:5b", "sw1:6b", "green", [ "v0" ] ],
+    [ "sw1:6b", "sw1:7b", "black", [ "v0" ] ],
+    [ "esp:TX", "chip1:Tx", "magenta", [ "h0" ] ],
+    [ "esp:RX", "chip1:Rx", "magenta", [ "h0" ] ],
+    [ "vcc2:VCC", "btn1:1.r", "red", [ "v0" ] ],
+    [ "chip1:IN", "btn1:2.l", "blue", [ "h40.21", "v-163.2", "h-144" ] ],
+    [ "chip1:RX", "esp:TX", "magenta", [ "h-19.2", "v153.6" ] ],
+    [ "esp:RX", "chip1:TX", "magenta", [ "h0" ] ],
+    [ "gnd2:GND", "chip1:GND", "black", [ "v0" ] ],
+    [ "vcc2:VCC", "chip1:VCC", "red", [ "v0" ] ]
+  ],
+  "dependencies": {}
+}

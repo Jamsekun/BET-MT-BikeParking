@@ -1,0 +1,21 @@
+{
+  "name": "qrcodescanner",
+  "author": "James Balolong",
+  "pins": [
+    "RX",
+    "TX",
+    "GND",
+    "VCC",
+    "IN"
+  ],
+  "controls": [
+    {
+      "id": "randomNum",
+      "label": "Tup number",
+      "type": "range",
+      "min": 2000,
+      "max": 5999,
+      "step": 1
+    }
+  ]
+}

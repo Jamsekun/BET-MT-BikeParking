@@ -1,0 +1,8 @@
+[wokwi]
+version = 1
+firmware = '.pio\build\rymcu-esp32-s3-devkitc-1\firmware.bin'
+elf = 'C:\James_folder\embedded_projects\Thesis_Clients\MT_Bike\PIO_Vscode_MT_Bike\Bike_Parking_Automate\.pio\build\rymcu-esp32-s3-devkitc-1\firmware.elf'
+
+[[chip]]
+name = 'qrcodescanner'
+binary = 'qrcodescanner.chip.wasm'
