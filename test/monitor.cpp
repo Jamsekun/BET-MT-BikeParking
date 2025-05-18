@@ -8,7 +8,7 @@
 #define LORA_DIO0 15  // LoRa DIO0
 #define RED_LED   40  // Red LED for machine error
 #define GREEN_LED 41  // Green LED for machine working
-#define BUZZER_PIN 45 // Buzzer for stolen alert
+#define BUZZER_PIN 38 // Buzzer for stolen alert
 
 // RGB LED pins for Parking Space 1 and 2
 #define RGB1_RED   1  // Space 1 RGB Red
@@ -18,15 +18,22 @@
 #define RGB2_GREEN 5  // Space 2 RGB Green
 #define RGB2_BLUE  6  // Space 2 RGB Blue
 
+
+
 class ParkingSpace {
 public:
     int spaceNumber;
     String status;           // "occupied", "available", "stolen"
     int redPin, greenPin, bluePin;
     bool isBlinking;        // For stolen state blinking
-    bool blinkState;        // Current state of blinking LED and buzzer
+    bool blinkState;        // Current state of blinking LED
     unsigned long lastBlinkTime;
-    const unsigned long blinkInterval = 500; // Blink and beep every 500ms
+    const unsigned long blinkInterval = 500; // Blink every 500ms
+    bool buzzerOn;          // Buzzer ON/OFF state
+    int buzzerCycleCount;   // Track number of ON/OFF cycles
+    unsigned long buzzerStartTime; // Time of last buzzer state change
+    bool buzzerOverride;    // Manual buzzer activation via Serial
+    const unsigned long buzzerInterval = 1000; // 1s ON, 1s OFF
 
     ParkingSpace(int num, int rPin, int gPin, int bPin) {
         spaceNumber = num;
@@ -37,6 +44,10 @@ public:
         isBlinking = false;
         blinkState = false;
         lastBlinkTime = 0;
+        buzzerOn = false;
+        buzzerCycleCount = 0;
+        buzzerStartTime = 0;
+        buzzerOverride = false;
 
         // Initialize pins
         pinMode(redPin, OUTPUT);
@@ -56,6 +67,11 @@ public:
             Serial.print(" status updated to: ");
             Serial.println(status);
             setLEDColor();
+            // Reset buzzer state on status change
+            buzzerCycleCount = 0;
+            buzzerOn = false;
+            buzzerOverride = false;
+            digitalWrite(BUZZER_PIN, LOW);
         }
     }
 
@@ -78,6 +94,7 @@ public:
     }
 
     void update(bool &buzzerActive) {
+        // Handle LED blinking for stolen state
         if (isBlinking && status == "stolen") {
             unsigned long currentTime = millis();
             if (currentTime - lastBlinkTime >= blinkInterval) {
@@ -86,14 +103,35 @@ public:
                 digitalWrite(greenPin, blinkState ? HIGH : LOW);
                 digitalWrite(bluePin, LOW);
                 lastBlinkTime = currentTime;
-                buzzerActive = true; // Signal buzzer to activate
                 Serial.print("Space ");
                 Serial.print(spaceNumber);
                 Serial.print(" blink state: ");
                 Serial.println(blinkState ? "ON" : "OFF");
             }
+        }
+
+        // Handle buzzer (stolen or override)
+        if ((status == "stolen" || buzzerOverride) && buzzerCycleCount < 5) {
+            unsigned long currentTime = millis();
+            if (currentTime - buzzerStartTime >= buzzerInterval) {
+                buzzerOn = !buzzerOn;
+                digitalWrite(BUZZER_PIN, buzzerOn ? HIGH : LOW);
+                delay(1000);
+                Serial.print("Space ");
+                Serial.print(spaceNumber);
+                Serial.print(" buzzer: ");
+                Serial.println(buzzerOn ? "ON" : "OFF");
+                buzzerStartTime = currentTime;
+                if (!buzzerOn) {
+                    buzzerCycleCount++; // Increment after OFF state
+                    Serial.print("Buzzer cycle count: ");
+                    Serial.println(buzzerCycleCount);
+                }
+            }
+            buzzerActive = true;
         } else {
-            buzzerActive = false; // No buzzer if not stolen
+            digitalWrite(BUZZER_PIN, LOW);
+            buzzerActive = false;
         }
     }
 };
@@ -104,6 +142,7 @@ ParkingSpace space2(2, RGB2_RED, RGB2_GREEN, RGB2_BLUE);
 
 void setup() {
     Serial.begin(115200);
+    while (!Serial) delay(10); // Wait for Serial
     Serial.println("LoRa Receiver starting...");
 
     // Initialize status LEDs and buzzer
@@ -115,16 +154,96 @@ void setup() {
     digitalWrite(BUZZER_PIN, LOW);
 
     // Initialize LoRa
+    Serial.println("Initializing LoRa...");
     LoRa.setPins(LORA_CS, LORA_RST, LORA_DIO0);
     if (!LoRa.begin(433E6)) {
         Serial.println("LoRa initialization failed!");
-        digitalWrite(RED_LED, HIGH); // Indicate error
+        digitalWrite(RED_LED, HIGH);
         while (1);
     }
     LoRa.setSyncWord(0xF1);
     Serial.println("LoRa initialized");
-    digitalWrite(GREEN_LED, HIGH); // Indicate system is working
+    digitalWrite(GREEN_LED, HIGH);
     Serial.println("System setup complete");
+    Serial.println("Enter commands (e.g., 'ON RGB1RED', 'ON BUZZER')");
+}
+
+void handleSerialCommand() {
+    if (Serial.available()) {
+        Serial.println("Received Serial input...");
+        String command = Serial.readStringUntil('\n');
+        command.trim();
+        Serial.print("Command: ");
+        Serial.println(command);
+        if (command.startsWith("ON ")) {
+            String led = command.substring(3);
+            if (led == "RGB1RED") {
+                digitalWrite(RGB1_RED, HIGH);
+                Serial.println("Override: RGB1_RED ON");
+            } else if (led == "RGB1GREEN") {
+                digitalWrite(RGB1_GREEN, HIGH);
+                Serial.println("Override: RGB1_GREEN ON");
+            } else if (led == "RGB1BLUE") {
+                digitalWrite(RGB1_BLUE, HIGH);
+                Serial.println("Override: RGB1_BLUE ON");
+            } else if (led == "RGB2RED") {
+                digitalWrite(RGB2_RED, HIGH);
+                Serial.println("Override: RGB2_RED ON");
+            } else if (led == "RGB2GREEN") {
+                digitalWrite(RGB2_GREEN, HIGH);
+                Serial.println("Override: RGB2_GREEN ON");
+            } else if (led == "RGB2BLUE") {
+                digitalWrite(RGB2_BLUE, HIGH);
+                Serial.println("Override: RGB2_BLUE ON");
+            } else if (led == "BUZZER") {
+                space1.buzzerOverride = true;
+                space1.buzzerCycleCount = 0; // Reset cycle count
+                space1.buzzerOn = false;     // Start with OFF
+                space1.buzzerStartTime = millis();
+                Serial.println("Override: BUZZER ON (5 cycles)");
+            } else {
+                Serial.println("Invalid LED ON command");
+            }
+        } else if (command.startsWith("OFF ")) {
+            String led = command.substring(4);
+            if (led == "RGB1RED") {
+                digitalWrite(RGB1_RED, LOW);
+                Serial.println("Override: RGB1_RED OFF");
+            } else if (led == "RGB1GREEN") {
+                digitalWrite(RGB1_GREEN, LOW);
+                Serial.println("Override: RGB1_GREEN OFF");
+            } else if (led == "RGB1BLUE") {
+                digitalWrite(RGB1_BLUE, LOW);
+                Serial.println("Override: RGB1_BLUE OFF");
+            } else if (led == "RGB2RED") {
+                digitalWrite(RGB2_RED, LOW);
+                Serial.println("Override: RGB2_RED OFF");
+            } else if (led == "RGB2GREEN") {
+                digitalWrite(RGB2_GREEN, LOW);
+                Serial.println("Override: RGB2_GREEN OFF");
+            } else if (led == "RGB2BLUE") {
+                digitalWrite(RGB2_BLUE, LOW);
+                Serial.println("Override: RGB2_BLUE OFF");
+            } else if (led == "BUZZER") {
+                space1.buzzerOverride = false;
+                space1.buzzerCycleCount = 5; // Stop cycles
+                digitalWrite(BUZZER_PIN, LOW);
+                Serial.println("Override: BUZZER OFF");
+            } else if (led == "RGB2") {
+                digitalWrite(RGB2_RED, LOW);
+                digitalWrite(RGB2_GREEN, LOW);
+                digitalWrite(RGB2_BLUE, LOW);
+                Serial.println("Override: RGB2 OFF");
+            } else if (led == "RGB1") {
+                digitalWrite(RGB1_RED, LOW);
+                digitalWrite(RGB1_GREEN, LOW);
+                digitalWrite(RGB1_BLUE, LOW);
+                Serial.println("Override: RGB1 OFF");
+            } else {
+                Serial.println("Invalid LED OFF command");
+            }
+        }
+    }
 }
 
 void loop() {
@@ -134,15 +253,15 @@ void loop() {
     // Update LED blinking and buzzer for stolen state
     space1.update(buzzerActive);
     space2.update(buzzerActive);
+    handleSerialCommand();
 
-    // Control buzzer
+    // Control buzzer (only one space’s buzzer is active at a time)
     static bool lastBuzzerState = false;
     if (buzzerActive) {
-        if (space1.isBlinking || space2.isBlinking) {
-            bool currentBlinkState = (space1.isBlinking ? space1.blinkState : space2.blinkState);
-            digitalWrite(BUZZER_PIN, currentBlinkState ? HIGH : LOW);
+        if (space1.buzzerOn || space2.buzzerOn) {
+            bool currentBlinkState = (space1.buzzerOn ? space1.buzzerOn : space2.buzzerOn);
             if (currentBlinkState != lastBuzzerState) {
-                Serial.print("Buzzer: Stolen alert ");
+                Serial.print("Buzzer: Stolen/Override alert ");
                 Serial.println(currentBlinkState ? "ON" : "OFF");
                 lastBuzzerState = currentBlinkState;
             }
@@ -150,7 +269,7 @@ void loop() {
     } else {
         digitalWrite(BUZZER_PIN, LOW);
         if (lastBuzzerState) {
-            Serial.println("Buzzer: Stolen alert OFF");
+            Serial.println("Buzzer: Stolen/Override alert OFF");
             lastBuzzerState = false;
         }
     }

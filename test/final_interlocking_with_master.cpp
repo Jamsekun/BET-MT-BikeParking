@@ -27,9 +27,11 @@
 #define SPACE2_B_LA_REVERSE 20  // Parking Space 2, Actuator B reverse
 
 // RFID UIDs
-const String UID_SPACE1 = "2607933D";
-const String UID_SPACE2 = "F6516F3D";
-const String UID_MASTER = "8669793D";
+const String UID_SPACE1 = "3CA0FFE2";   // Parking Space #1
+const String UID_SPACE2 = "AA2B0C7D";   // Parking Space #2
+const String UID_RESERVE1 = "BBBBBBBB"; // Reserve Card #1
+const String UID_RESERVE2 = "CCCCCCCC"; // Reserve Card #2
+const String UID_RESET = "DDDDDDDD";    // Reset Card
 
 void updateDisplay(String message);
 void manageBuzzer();
@@ -72,21 +74,20 @@ public:
         stolenAlertSent = false;
         status = "available";
 
-        // Initialize pins
         pinMode(A_IR_pin, INPUT);
         pinMode(B_IR_pin, INPUT);
         pinMode(A_LA_forward_pin, OUTPUT);
         pinMode(B_LA_forward_pin, OUTPUT);
         pinMode(A_LA_reverse_pin, OUTPUT);
         pinMode(B_LA_reverse_pin, OUTPUT);
-        stopActuators(); // Ensure all actuators are off at startup
+        stopActuators();
         Serial.print("ParkingSpace ");
         Serial.print(spaceNumber);
         Serial.println(" initialized");
     }
 
     void checkIR() {
-        bool a_ir = digitalRead(A_IR_pin) == LOW; // LOW when bike is present
+        bool a_ir = digitalRead(A_IR_pin) == LOW;
         bool b_ir = digitalRead(B_IR_pin) == LOW;
         bool prevOccupied = occupied;
         occupied = a_ir && b_ir;
@@ -103,8 +104,8 @@ public:
     }
 
     void startLocking() {
-        stopActuators(); // Ensure all pins are LOW before changing state
-        delay(10); // Brief delay for interlocking safety
+        stopActuators();
+        delay(10);
         digitalWrite(A_LA_forward_pin, HIGH);
         digitalWrite(B_LA_forward_pin, HIGH);
         digitalWrite(A_LA_reverse_pin, LOW);
@@ -118,8 +119,8 @@ public:
     }
 
     void startUnlocking() {
-        stopActuators(); // Ensure all pins are LOW before changing state
-        delay(10); // Brief delay for interlocking safety
+        stopActuators();
+        delay(10);
         digitalWrite(A_LA_reverse_pin, HIGH);
         digitalWrite(B_LA_reverse_pin, HIGH);
         digitalWrite(A_LA_forward_pin, LOW);
@@ -178,21 +179,21 @@ public:
         Serial.println(uid);
     }
 
-    void sendStatus() {
+    void sendStatus(String overrideStatus = "") {
+        String sendStatus = (overrideStatus != "") ? overrideStatus : status;
         LoRa.beginPacket();
         LoRa.print("Space ");
         LoRa.print(spaceNumber);
         LoRa.print(": ");
-        LoRa.print(status);
+        LoRa.print(sendStatus);
         LoRa.endPacket();
         Serial.print("Space ");
         Serial.print(spaceNumber);
         Serial.print(" sent LoRa status: ");
-        Serial.println(status);
+        Serial.println(sendStatus);
     }
 };
 
-// Parking space instances
 ParkingSpace space1(1, 1, 2, SPACE1_A_LA_FORWARD, SPACE1_B_LA_FORWARD, SPACE1_A_LA_REVERSE, SPACE1_B_LA_REVERSE);
 ParkingSpace space2(2, 42, 41, SPACE2_A_LA_FORWARD, SPACE2_B_LA_FORWARD, SPACE2_A_LA_REVERSE, SPACE2_B_LA_REVERSE);
 
@@ -229,6 +230,10 @@ void setup() {
     Serial.println("Buzzer initialized");
     updateDisplay("System Ready");
     Serial.println("System setup complete");
+
+    space1.sendStatus();
+    space2.sendStatus();
+    Serial.println("Initial statuses sent via LoRa");
 }
 
 void updateDisplay(String message) {
@@ -267,7 +272,7 @@ void manageBuzzer() {
                 Serial.println("Buzzer: Card detected beep finished");
             }
             break;
-        case STOLEN: {
+        case STOLEN:
             if (buzzerCount >= 5) {
                 digitalWrite(BUZZER_PIN, LOW);
                 buzzerActive = false;
@@ -286,21 +291,100 @@ void manageBuzzer() {
                 }
             }
             break;
-        }
         case OFF:
             buzzerActive = false;
             break;
     }
 }
 
+void handleSerialCommand() {
+    if (Serial.available()) {
+        String command = Serial.readStringUntil('\n');
+        command.trim();
+        if (command.startsWith("RUN ")) {
+            String actuator = command.substring(4);
+            if (actuator == "SPACE1_A_LA_FORWARD") {
+                space1.stopActuators();
+                delay(10);
+                digitalWrite(SPACE1_A_LA_FORWARD, HIGH);
+                digitalWrite(SPACE1_A_LA_REVERSE, LOW);
+                Serial.println("Override: SPACE1_A_LA_FORWARD ON");
+            } else if (actuator == "SPACE1_A_LA_REVERSE") {
+                space1.stopActuators();
+                delay(10);
+                digitalWrite(SPACE1_A_LA_REVERSE, HIGH);
+                digitalWrite(SPACE1_A_LA_FORWARD, LOW);
+                Serial.println("Override: SPACE1_A_LA_REVERSE ON");
+            } else if (actuator == "SPACE1_B_LA_FORWARD") {
+                space1.stopActuators();
+                delay(10);
+                digitalWrite(SPACE1_B_LA_FORWARD, HIGH);
+                digitalWrite(SPACE1_B_LA_REVERSE, LOW);
+                Serial.println("Override: SPACE1_B_LA_FORWARD ON");
+            } else if (actuator == "SPACE1_B_LA_REVERSE") {
+                space1.stopActuators();
+                delay(10);
+                digitalWrite(SPACE1_B_LA_REVERSE, HIGH);
+                digitalWrite(SPACE1_B_LA_FORWARD, LOW);
+                Serial.println("Override: SPACE1_B_LA_REVERSE ON");
+            } else if (actuator == "SPACE2_A_LA_FORWARD") {
+                space2.stopActuators();
+                delay(10);
+                digitalWrite(SPACE2_A_LA_FORWARD, HIGH);
+                digitalWrite(SPACE2_A_LA_REVERSE, LOW);
+                Serial.println("Override: SPACE2_A_LA_FORWARD ON");
+            } else if (actuator == "SPACE2_A_LA_REVERSE") {
+                space2.stopActuators();
+                delay(10);
+                digitalWrite(SPACE2_A_LA_REVERSE, HIGH);
+                digitalWrite(SPACE2_A_LA_FORWARD, LOW);
+                Serial.println("Override: SPACE2_A_LA_REVERSE ON");
+            } else if (actuator == "SPACE2_B_LA_FORWARD") {
+                space2.stopActuators();
+                delay(10);
+                digitalWrite(SPACE2_B_LA_FORWARD, HIGH);
+                digitalWrite(SPACE2_B_LA_REVERSE, LOW);
+                Serial.println("Override: SPACE2_B_LA_FORWARD ON");
+            } else if (actuator == "SPACE2_B_LA_REVERSE") {
+                space2.stopActuators();
+                delay(10);
+                digitalWrite(SPACE2_B_LA_REVERSE, HIGH);
+                digitalWrite(SPACE2_B_LA_FORWARD, LOW);
+                Serial.println("Override: SPACE2_B_LA_REVERSE ON");
+            } else {
+                Serial.println("Invalid actuator command");
+            }
+        } else if (command.startsWith("SEND ")) {
+            String sendermsg = command.substring(5);
+            if (sendermsg == "1AVAILABLE") {
+                space1.sendStatus("available");
+            } else if (sendermsg == "1OCCUPIED") {
+                space1.sendStatus("occupied");
+            } else if (sendermsg == "1STOLEN") {
+                space1.sendStatus("stolen");
+            } else if (sendermsg == "2AVAILABLE") {
+                space2.sendStatus("available");
+            } else if (sendermsg == "2OCCUPIED") {
+                space2.sendStatus("occupied");
+            } else if (sendermsg == "2STOLEN") {
+                space2.sendStatus("stolen");
+            } else {
+                Serial.println("Invalid SEND command");
+            }
+        } else {
+            Serial.println("Invalid command");
+        }
+    }
+}
+
 void loop() {
-    // Update parking spaces
     space1.checkIR();
     space1.update();
     space2.checkIR();
     space2.update();
 
-    // Check for stolen bikes
+    handleSerialCommand();
+
     if (space1.locked && !space1.occupied && !space1.unlockingInProgress && !space1.stolenAlertSent) {
         space1.status = "stolen";
         space1.sendStatus();
@@ -324,10 +408,8 @@ void loop() {
         updateDisplay("Bike stolen in Space 2");
     }
 
-    // Manage buzzer
     manageBuzzer();
 
-    // Check RFID
     if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
         String uid = "";
         for (byte i = 0; i < rfid.uid.size; i++) {
@@ -339,7 +421,6 @@ void loop() {
         Serial.print("RFID: Card detected, UID=");
         Serial.println(uid);
 
-        // Beep buzzer for card detection
         buzzerState = CARD_DETECTED;
         buzzerStartTime = millis();
         buzzerActive = true;
@@ -348,42 +429,59 @@ void loop() {
         updateDisplay("UID: " + uid);
 
         // Validate UID
-        if (uid != UID_SPACE1 && uid != UID_SPACE2 && uid != UID_MASTER) {
+        if (uid != UID_SPACE1 && uid != UID_SPACE2 && uid != UID_RESERVE1 && uid != UID_RESERVE2 && uid != UID_RESET) {
             updateDisplay("The RFID card is unknown");
             Serial.println("RFID: Unknown card");
-            return; // Exit RFID handling for unknown cards
+            return;
+        }
+
+        // Handle reset card
+        if (uid == UID_RESET) {
+            bool resetDone = false;
+            if (space1.status == "stolen") {
+                space1.status = "available";
+                space1.stolenAlertSent = false;
+                space1.sendStatus();
+                Serial.println("Space 1 reset to available");
+                resetDone = true;
+            }
+            if (space2.status == "stolen") {
+                space2.status = "available";
+                space2.stolenAlertSent = false;
+                space2.sendStatus();
+                Serial.println("Space 2 reset to available");
+                resetDone = true;
+            }
+            updateDisplay(resetDone ? "Reset card used" : "No stolen spaces");
+            return;
         }
 
         bool actionTaken = false;
 
-        // Handle unlocking (specific UID or MASTER)
-        if (space1.locked && (space1.associatedUID == uid || uid == UID_MASTER)) {
+        // Handle unlocking
+        if (space1.locked && (space1.associatedUID == uid || uid == UID_RESERVE1 || uid == UID_RESERVE2)) {
             space1.startUnlocking();
             actionTaken = true;
             Serial.println("Space 1: Unlocking initiated");
-        }
-        else if (space2.locked && (space2.associatedUID == uid || uid == UID_MASTER)) {
+        } else if (space2.locked && (space2.associatedUID == uid || uid == UID_RESERVE1 || uid == UID_RESERVE2)) {
             space2.startUnlocking();
             actionTaken = true;
             Serial.println("Space 2: Unlocking initiated");
         }
 
-        // Handle locking (only specific UIDs, not MASTER)
-        if (!actionTaken && uid != UID_MASTER) {
+        // Handle locking (exclude reserve cards)
+        if (!actionTaken && uid != UID_RESERVE1 && uid != UID_RESERVE2) {
             if (uid == UID_SPACE1 && space1.occupied && !space1.locked && !space1.lockingInProgress) {
                 space1.associateUID(uid);
                 space1.startLocking();
                 actionTaken = true;
                 Serial.println("Space 1: Locking initiated");
-            }
-            else if (uid == UID_SPACE2 && space2.occupied && !space2.locked && !space2.lockingInProgress) {
+            } else if (uid == UID_SPACE2 && space2.occupied && !space2.locked && !space2.lockingInProgress) {
                 space2.associateUID(uid);
                 space2.startLocking();
                 actionTaken = true;
                 Serial.println("Space 2: Locking initiated");
-            }
-            else {
-                // Provide feedback if locking conditions aren't met
+            } else {
                 space1.checkIR();
                 space2.checkIR();
                 bool oneIRSpace1 = digitalRead(space1.A_IR_pin) == LOW || digitalRead(space1.B_IR_pin) == LOW;
@@ -391,8 +489,7 @@ void loop() {
                 if ((oneIRSpace1 && !space1.locked) || (oneIRSpace2 && !space2.locked)) {
                     updateDisplay("Please readjust bike");
                     Serial.println("RFID: Please readjust bike");
-                }
-                else if (!space1.occupied && !space2.occupied) {
+                } else if (!space1.occupied && !space2.occupied) {
                     updateDisplay("No bike detected");
                     Serial.println("RFID: No bike detected");
                 }
