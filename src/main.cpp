@@ -1,390 +1,402 @@
 #include <Arduino.h>
-
-#include <Keypad.h>
-
-#include <U8g2lib.h>
-
+#include <SPI.h>
+#include <MFRC522.h>
+#include <LoRa.h>
 #include <Wire.h>
+#include <Adafruit_SSD1306.h>
 
+// Pin definitions
+#define RST_PIN 16     // RFID reset pin
+#define SS_PIN  17     // RFID slave chip select pin
+#define LORA_CS 10     // LoRa chip select
+#define LORA_RST 14    // LoRa reset
+#define LORA_DIO0 15   // LoRa DIO0
+#define BUZZER_PIN 40  // Buzzer pin
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+#define OLED_RESET -1
 
-#define LED 21
+// Actuator pins
+#define SPACE1_A_LA_FORWARD 39  // Parking Space 1, Actuator A forward
+#define SPACE1_B_LA_FORWARD 38  // Parking Space 1, Actuator B forward
+#define SPACE1_A_LA_REVERSE 48  // Parking Space 1, Actuator A reverse
+#define SPACE1_B_LA_REVERSE 47  // Parking Space 1, Actuator B reverse
+#define SPACE2_A_LA_FORWARD 37  // Parking Space 2, Actuator A forward
+#define SPACE2_B_LA_FORWARD 36  // Parking Space 2, Actuator B forward
+#define SPACE2_A_LA_REVERSE 21  // Parking Space 2, Actuator A reverse
+#define SPACE2_B_LA_REVERSE 20  // Parking Space 2, Actuator B reverse
 
+// RFID UIDs
+const String UID_SPACE1 = "2607933D";
+const String UID_SPACE2 = "F6516F3D";
+const String UID_MASTER = "8669793D";
 
-const uint8_t ROWS = 4;
-const uint8_t COLS = 4;
-char keys[ROWS][COLS] = {
-  { '1', '2', '3', 'A' },
-  { '4', '5', '6', 'B' },
-  { '7', '8', '9', 'C' },
-  { '*', '0', '#', 'D' }
-};
+void updateDisplay(String message);
+void manageBuzzer();
 
-uint8_t colPins[COLS] = { 39, 40, 41, 42 }; // Pins connected to C1, C2, C3, C4
-uint8_t rowPins[ROWS] = { 35, 36, 37, 38 }; // Pins connected to R1, R2, R3, R4
+// Initialize components
+MFRC522 rfid(SS_PIN, RST_PIN);
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, OLED_RESET);
 
-Keypad keypad = Keypad(makeKeymap(keys), rowPins, colPins, ROWS, COLS);
-
-
-class OLED {
-  private:
-      // U8g2 object for SSD1306 display via I2C
-      U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2;
-      // SDA and SCL pins
-      int sdaPin;
-      int sclPin;
-  
-  public:
-      // Constructor to initialize SDA and SCL pins
-      OLED(int sda, int scl) : u8g2(U8G2_R0, U8X8_PIN_NONE, scl, sda), sdaPin(sda), sclPin(scl) {}
-  
-      // Initialize the display and I2C
-      void begin() {
-          Wire.begin(sdaPin, sclPin);  // Initialize I2C with specified SDA and SCL
-          u8g2.begin();                // Initialize the display
-      }
-  
-      // Clear the display buffer
-      void clear() {
-          u8g2.clearBuffer();
-      }
-  
-      // Set the font for drawing text
-      void setFont(const uint8_t* font) {
-          u8g2.setFont(font);
-      }
-  
-      // Draw a string at the specified (x, y) position
-      void drawString(int x, int y, const char* str) {
-          u8g2.drawStr(x, y, str);
-      }
-  
-      // Send the buffer to the display
-      void update() {
-          u8g2.sendBuffer();
-      }
-
-  };
-
-//------------------------------------------//
-
-#define MAX_QR_LENGTH 20
-
-//-------------------------------------//
 class ParkingSpace {
-  public:
-      ParkingSpace(int pin, int number) : pin(pin), number(number), occupied(false), locked(false), qrData("") {
-          pinMode(pin, INPUT_PULLUP); // Initialize limit switch pin
-      }
-  
-      void check() {
-          bool currentState = digitalRead(pin) == LOW; // LOW when pressed
-          if (currentState != occupied) {
-              occupied = currentState;
-              Serial.print("Parking Space ");
-              Serial.print(number);
-              Serial.print(": ");
-              Serial.println(occupied ? "Occupied" : "Empty");
-          }
-      }
-  
-      bool isOccupied() const {
-          return occupied;
-      }
-  
-      bool isLocked() const {
-          return locked;
-      }
-  
-      String getQRData() const {
-          return qrData;
-      }
-  
-      void setQRData(const String& data) {
-          if (!locked) {
-              qrData = data;
-              locked = true;
-              Serial.println("Locked QR code " + data + " to parking space " + String(number));
-          } else {
-              Serial.println("Error: Parking space " + String(number) + " is already locked.");
-          }
-      }
-  
-      bool unlock(const String& qrCode) {
-          if (locked && qrData == qrCode) {
-              locked = false;
-              qrData = "";
-              Serial.println("Unlocked parking space " + String(number) + " with QR code " + qrCode);
-              return true;
-          } else {
-              Serial.println("Error: Cannot unlock parking space " + String(number) + ". Incorrect QR code.");
-              return false;
-          }
-      }
-  
-      int getNumber() const {
-          return number;
-      }
-  
-  private:
-      int pin;
-      int number;
-      bool occupied;
-      bool locked;
-      String qrData;
-  };
+public:
+    int spaceNumber;
+    String status;        // "occupied", "available", "stolen"
+    bool occupied;        // True if both IR sensors are ON
+    bool locked;          // True if actuators are extended
+    String associatedUID; // UID when locked
+    int A_IR_pin;
+    int B_IR_pin;
+    int A_LA_forward_pin;
+    int B_LA_forward_pin;
+    int A_LA_reverse_pin;
+    int B_LA_reverse_pin;
+    bool lockingInProgress;
+    bool unlockingInProgress;
+    unsigned long startTime;
+    bool stolenAlertSent; // To prevent repeated alerts
 
-//------------------------------------------------//
+    ParkingSpace(int num, int a_ir, int b_ir, int a_la_fwd, int b_la_fwd, int a_la_rev, int b_la_rev) {
+        spaceNumber = num;
+        A_IR_pin = a_ir;
+        B_IR_pin = b_ir;
+        A_LA_forward_pin = a_la_fwd;
+        B_LA_forward_pin = b_la_fwd;
+        A_LA_reverse_pin = a_la_rev;
+        B_LA_reverse_pin = b_la_rev;
+        occupied = false;
+        locked = false;
+        associatedUID = "";
+        lockingInProgress = false;
+        unlockingInProgress = false;
+        stolenAlertSent = false;
+        status = "available";
 
-
-class QRScanner {
-  public:
-      QRScanner(OLED& display) : oled(display), lastQRCode("") {}
-  
-      String update() {
-          static unsigned long lastReadTime = 0;
-          const unsigned long timeout = 500;  // 500ms timeout
-  
-          while (Serial.available()) {
-              char c = Serial.read();
-              commandBuffer += c;
-              lastReadTime = millis();
-          }
-  
-          if (commandBuffer.length() > 0 && millis() - lastReadTime >= timeout) {
-              lastQRCode = commandBuffer;
-              commandBuffer = "";
-              Serial.println("Received QR code: " + lastQRCode);
-          }
-  
-          return lastQRCode;
-      }
-  
-      String getLastQRCode() const {
-          return lastQRCode;
-      }
-  
-  private:
-      String commandBuffer;
-      String lastQRCode;
-      OLED& oled;
-  };
-
-class ScreenManager {
-  private:
-    enum State { MAIN_SCREEN, LOCK_SCREEN, UNLOCK_SCREEN, CONFIRMATION_SCREEN, ERROR_SCREEN };
-    State currentState;
-    OLED& oled;
-    QRScanner& qrScanner;
-    ParkingSpace* spaces;
-    String inputBuffer;
-    unsigned long confirmationStartTime;
-    const unsigned long confirmationDuration = 2000;  // 2 seconds
-  
-  public:
-      ScreenManager(OLED& display, QRScanner& scanner, ParkingSpace* spacesArray)
-          : oled(display), qrScanner(scanner), spaces(spacesArray), currentState(MAIN_SCREEN), inputBuffer("") {}
-  
-      void update() {
-          char key = keypad.getKey();
-          if (key) {
-              handleKeypadInput(key);
-          }
-          handleStateTransitions();
-          updateDisplay();
-      }
-  
-  private:
-  void handleKeypadInput(char key) {
-    switch (currentState) {
-        case MAIN_SCREEN:
-            if (key == 'A') {
-                currentState = LOCK_SCREEN;
-                inputBuffer = "";
-            } else if (key == 'B') {
-                currentState = UNLOCK_SCREEN;
-                inputBuffer = "";
-            }
-            break;
-
-        case LOCK_SCREEN:
-            if (key >= '0' && key <= '9') {
-                inputBuffer += key;
-            } else if (key == '#') {
-                int parkingNumber = inputBuffer.toInt();
-                if (parkingNumber >= 1 && parkingNumber <= 8) {
-                    ParkingSpace& space = spaces[parkingNumber - 1];
-                    if (space.isOccupied() && !space.isLocked()) {
-                        String qrCode = qrScanner.getLastQRCode();
-                        if (qrCode.length() > 0) {
-                            space.setQRData(qrCode);
-                            currentState = CONFIRMATION_SCREEN;
-                            confirmationStartTime = millis();
-                        } else {
-                            Serial.println("No QR code available to lock.");
-                            currentState = ERROR_SCREEN;
-                            confirmationStartTime = millis();
-                        }
-                    } else {
-                        Serial.println("Cannot lock: Space is either not occupied or already locked.");
-                        currentState = ERROR_SCREEN;
-                        confirmationStartTime = millis();
-                    }
-                } else {
-                    Serial.println("Invalid parking space number.");
-                    currentState = ERROR_SCREEN;
-                    confirmationStartTime = millis();
-                }
-            } else if (key == '*') {
-                currentState = MAIN_SCREEN;
-            }
-            break;
-
-        case UNLOCK_SCREEN:
-            if (key >= '0' && key <= '9') {
-                inputBuffer += key;
-            } else if (key == '#') {
-                int parkingNumber = inputBuffer.toInt();
-                if (parkingNumber >= 1 && parkingNumber <= 8) {
-                    ParkingSpace& space = spaces[parkingNumber - 1];
-                    String qrCode = qrScanner.getLastQRCode();
-                    if (space.isLocked()) {
-                        if (space.unlock(qrCode)) {
-                            currentState = CONFIRMATION_SCREEN;
-                            confirmationStartTime = millis();
-                        } else {
-                            currentState = ERROR_SCREEN;
-                            confirmationStartTime = millis();
-                        }
-                    } else {
-                        Serial.println("Error: Parking space " + String(parkingNumber) + " is not locked.");
-                        currentState = ERROR_SCREEN;
-                        confirmationStartTime = millis();
-                    }
-                } else {
-                    Serial.println("Invalid parking space number.");
-                    currentState = ERROR_SCREEN;
-                    confirmationStartTime = millis();
-                }
-            } else if (key == '*') {
-                currentState = MAIN_SCREEN;
-            }
-            break;
-        }
-      }
-  
-      void handleStateTransitions() {
-          if (currentState == CONFIRMATION_SCREEN || currentState == ERROR_SCREEN) {
-              if (millis() - confirmationStartTime >= confirmationDuration) {
-                  currentState = MAIN_SCREEN;
-              }
-          }
-      }
-  
-      void updateDisplay() {
-        oled.clear();
-        oled.setFont(u8g2_font_t0_11_mf);
-        switch (currentState) {
-            case MAIN_SCREEN:
-                oled.drawString(0, 12, qrScanner.getLastQRCode().c_str());
-                oled.drawString(0, 24, "[A] LOCK");
-                oled.drawString(0, 36, "[B] UNLOCK");
-                break;
-    
-            case LOCK_SCREEN:
-                oled.drawString(0, 12, "Locking bike");
-                oled.drawString(0, 24, "Enter parking #: ");
-                oled.drawString(0, 36, inputBuffer.c_str());
-                break;
-    
-            case UNLOCK_SCREEN:
-                oled.drawString(0, 12, "Unlocking bike");
-                oled.drawString(0, 24, "Enter parking #: ");
-                oled.drawString(0, 36, inputBuffer.c_str());
-                break;
-    
-            case CONFIRMATION_SCREEN:
-                oled.drawString(0, 12, "Operation successful!");
-                oled.drawString(0, 24, (currentState == UNLOCK_SCREEN) ? "Unlocked space" : "Locked to space");
-                oled.drawString(0, 36, inputBuffer.c_str());
-                break;
-    
-            case ERROR_SCREEN:
-                oled.drawString(0, 24, "Error: Invalid");
-                oled.drawString(0, 36, "or locked space");
-                break;
-        }
-        oled.update();
+        // Initialize pins
+        pinMode(A_IR_pin, INPUT);
+        pinMode(B_IR_pin, INPUT);
+        pinMode(A_LA_forward_pin, OUTPUT);
+        pinMode(B_LA_forward_pin, OUTPUT);
+        pinMode(A_LA_reverse_pin, OUTPUT);
+        pinMode(B_LA_reverse_pin, OUTPUT);
+        stopActuators(); // Ensure all actuators are off at startup
+        Serial.print("ParkingSpace ");
+        Serial.print(spaceNumber);
+        Serial.println(" initialized");
     }
-  };
 
-ParkingSpace spaces[] = {
-  ParkingSpace(18, 1),
-  ParkingSpace(17, 2),
-  ParkingSpace(16, 3),
-  ParkingSpace(15, 4),
-  ParkingSpace(7, 5),
-  ParkingSpace(6, 6),
-  ParkingSpace(5, 7),
-  ParkingSpace(4, 8),
+    void checkIR() {
+        bool a_ir = digitalRead(A_IR_pin) == LOW; // LOW when bike is present
+        bool b_ir = digitalRead(B_IR_pin) == LOW;
+        bool prevOccupied = occupied;
+        occupied = a_ir && b_ir;
+        if (occupied != prevOccupied) {
+            Serial.print("Space ");
+            Serial.print(spaceNumber);
+            Serial.print(" IR status: A_IR=");
+            Serial.print(a_ir ? "ON" : "OFF");
+            Serial.print(", B_IR=");
+            Serial.print(b_ir ? "ON" : "OFF");
+            Serial.print(", Occupied=");
+            Serial.println(occupied ? "True" : "False");
+        }
+    }
+
+    void startLocking() {
+        stopActuators(); // Ensure all pins are LOW before changing state
+        delay(10); // Brief delay for interlocking safety
+        digitalWrite(A_LA_forward_pin, HIGH);
+        digitalWrite(B_LA_forward_pin, HIGH);
+        digitalWrite(A_LA_reverse_pin, LOW);
+        digitalWrite(B_LA_reverse_pin, LOW);
+        lockingInProgress = true;
+        startTime = millis();
+        Serial.print("Space ");
+        Serial.print(spaceNumber);
+        Serial.println(" starting locking (forward)");
+        updateDisplay("Locking Bike Please wait");
+    }
+
+    void startUnlocking() {
+        stopActuators(); // Ensure all pins are LOW before changing state
+        delay(10); // Brief delay for interlocking safety
+        digitalWrite(A_LA_reverse_pin, HIGH);
+        digitalWrite(B_LA_reverse_pin, HIGH);
+        digitalWrite(A_LA_forward_pin, LOW);
+        digitalWrite(B_LA_forward_pin, LOW);
+        unlockingInProgress = true;
+        startTime = millis();
+        Serial.print("Space ");
+        Serial.print(spaceNumber);
+        Serial.println(" starting unlocking (reverse)");
+        updateDisplay("Unlocking Bike Please wait");
+    }
+
+    void stopActuators() {
+        digitalWrite(A_LA_forward_pin, LOW);
+        digitalWrite(B_LA_forward_pin, LOW);
+        digitalWrite(A_LA_reverse_pin, LOW);
+        digitalWrite(B_LA_reverse_pin, LOW);
+        Serial.print("Space ");
+        Serial.print(spaceNumber);
+        Serial.println(" actuators stopped");
+    }
+
+    void update() {
+        if (lockingInProgress && millis() - startTime >= 8000) {
+            stopActuators();
+            locked = true;
+            lockingInProgress = false;
+            status = occupied ? "occupied" : "stolen";
+            Serial.print("Space ");
+            Serial.print(spaceNumber);
+            Serial.print(" locked, Status=");
+            Serial.println(status);
+            sendStatus();
+            updateDisplay("Sending Info");
+        }
+        if (unlockingInProgress && millis() - startTime >= 8000) {
+            stopActuators();
+            locked = false;
+            unlockingInProgress = false;
+            associatedUID = "";
+            status = "available";
+            Serial.print("Space ");
+            Serial.print(spaceNumber);
+            Serial.print(" unlocked, Status=");
+            Serial.println(status);
+            sendStatus();
+            updateDisplay("Sending Info");
+        }
+    }
+
+    void associateUID(String uid) {
+        associatedUID = uid;
+        Serial.print("Space ");
+        Serial.print(spaceNumber);
+        Serial.print(" associated with UID: ");
+        Serial.println(uid);
+    }
+
+    void sendStatus() {
+        LoRa.beginPacket();
+        LoRa.print("Space ");
+        LoRa.print(spaceNumber);
+        LoRa.print(": ");
+        LoRa.print(status);
+        LoRa.endPacket();
+        Serial.print("Space ");
+        Serial.print(spaceNumber);
+        Serial.print(" sent LoRa status: ");
+        Serial.println(status);
+    }
 };
 
-const String password = "1234"; // change your password here
-String input_password;
+// Parking space instances
+ParkingSpace space1(1, 1, 19, SPACE1_A_LA_FORWARD, SPACE1_B_LA_FORWARD, SPACE1_A_LA_REVERSE, SPACE1_B_LA_REVERSE);
+ParkingSpace space2(2, 42, 41, SPACE2_A_LA_FORWARD, SPACE2_B_LA_FORWARD, SPACE2_A_LA_REVERSE, SPACE2_B_LA_REVERSE);
 
-OLED oled(8, 9);  // Assuming SDA_PIN = 8, SCL_PIN = 9
-QRScanner qrScanner(oled);
-ScreenManager screenManager(oled, qrScanner, spaces);
+// Buzzer control
+unsigned long buzzerStartTime = 0;
+int buzzerCount = 0;
+bool buzzerActive = false;
+enum BuzzerState { OFF, CARD_DETECTED, STOLEN };
+BuzzerState buzzerState = OFF;
 
 void setup() {
-  pinMode(LED, OUTPUT);
-  Serial.begin(115200);
-  Serial.println("Data received from UART chip:");
-  oled.begin();  // Initialize the OLED display with .wire and u8g2 begin
-
-
+    Serial.begin(115200);
+    Serial.println("System starting...");
+    SPI.begin();
+    rfid.PCD_Init();
+    Serial.println("RFID initialized");
+    LoRa.setPins(LORA_CS, LORA_RST, LORA_DIO0);
+    if (!LoRa.begin(433E6)) {
+        Serial.println("LoRa init failed!");
+        while (1);
+    }
+    LoRa.setSyncWord(0xF1);
+    Serial.println("LoRa initialized");
+    if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+        Serial.println("OLED init failed!");
+        while (1);
+    }
+    Serial.println("OLED initialized");
+    display.clearDisplay();
+    display.setTextSize(1);
+    display.setTextColor(SSD1306_WHITE);
+    pinMode(BUZZER_PIN, OUTPUT);
+    digitalWrite(BUZZER_PIN, LOW);
+    Serial.println("Buzzer initialized");
+    updateDisplay("System Ready");
+    Serial.println("System setup complete");
 }
 
+void updateDisplay(String message) {
+    display.clearDisplay();
+    display.setCursor(0, 0);
+    int availableSpaces = (!space1.locked) + (!space2.locked);
+    display.print("Available Spaces: ");
+    display.println(availableSpaces);
+    if (space1.status == "stolen") {
+        display.print("Bike stolen in Space 1");
+    }
+    if (space2.status == "stolen") {
+        display.print("Bike stolen in Space 2");
+    }
+    display.setCursor(0, 20);
+    display.println(message);
+    display.display();
+    Serial.print("OLED Display: ");
+    Serial.print("Available Spaces: ");
+    Serial.print(availableSpaces);
+    Serial.print(", Message: ");
+    Serial.println(message);
+}
+
+void manageBuzzer() {
+    unsigned long currentTime = millis();
+    if (!buzzerActive) return;
+
+    switch (buzzerState) {
+        case CARD_DETECTED:
+            if (currentTime - buzzerStartTime < 100) {
+                digitalWrite(BUZZER_PIN, HIGH);
+            } else {
+                digitalWrite(BUZZER_PIN, LOW);
+                buzzerActive = false;
+                Serial.println("Buzzer: Card detected beep finished");
+            }
+            break;
+        case STOLEN: {
+            if (buzzerCount >= 5) {
+                digitalWrite(BUZZER_PIN, LOW);
+                buzzerActive = false;
+                Serial.println("Buzzer: Stolen alert finished");
+                break;
+            }
+            unsigned long elapsed = currentTime - buzzerStartTime;
+            if (elapsed % 2000 < 1000) {
+                digitalWrite(BUZZER_PIN, HIGH);
+            } else if (elapsed % 2000 >= 1000) {
+                digitalWrite(BUZZER_PIN, LOW);
+                if (elapsed >= (buzzerCount + 1) * 2000) {
+                    buzzerCount++;
+                    Serial.print("Buzzer: Stolen beep #");
+                    Serial.println(buzzerCount);
+                }
+            }
+            break;
+        }
+        case OFF:
+            buzzerActive = false;
+            break;
+    }
+}
 
 void loop() {
-  // digitalWrite(LED, HIGH);
-  // delay(500);
-  // digitalWrite(LED, LOW);
-  // delay(500);
+    // Update parking spaces
+    space1.checkIR();
+    space1.update();
+    space2.checkIR();
+    space2.update();
 
-  // while (Serial.available()) {
-  //   Serial.print((char)Serial.read());
-  // }
+    // Check for stolen bikes
+    if (space1.locked && !space1.occupied && !space1.unlockingInProgress && !space1.stolenAlertSent) {
+        space1.status = "stolen";
+        space1.sendStatus();
+        buzzerState = STOLEN;
+        buzzerStartTime = millis();
+        buzzerCount = 0;
+        buzzerActive = true;
+        space1.stolenAlertSent = true;
+        Serial.println("Space 1: Bike stolen detected");
+        updateDisplay("Bike stolen in Space 1");
+    }
+    if (space2.locked && !space2.occupied && !space2.unlockingInProgress && !space2.stolenAlertSent) {
+        space2.status = "stolen";
+        space2.sendStatus();
+        buzzerState = STOLEN;
+        buzzerStartTime = millis();
+        buzzerCount = 0;
+        buzzerActive = true;
+        space2.stolenAlertSent = true;
+        Serial.println("Space 2: Bike stolen detected");
+        updateDisplay("Bike stolen in Space 2");
+    }
 
-  String qrCode = qrScanner.update();
-  screenManager.update();
+    // Manage buzzer
+    manageBuzzer();
 
-  for (auto& space : spaces) { //needs improvement, dont check all the time
-    space.check();
-  }
+    // Check RFID
+    if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+        String uid = "";
+        for (byte i = 0; i < rfid.uid.size; i++) {
+            uid += String(rfid.uid.uidByte[i] < 0x10 ? "0" : "");
+            uid += String(rfid.uid.uidByte[i], HEX);
+        }
+        uid.toUpperCase();
+        rfid.PICC_HaltA();
+        Serial.print("RFID: Card detected, UID=");
+        Serial.println(uid);
 
+        // Beep buzzer for card detection
+        buzzerState = CARD_DETECTED;
+        buzzerStartTime = millis();
+        buzzerActive = true;
+        Serial.println("Buzzer: Card detected beep started");
 
+        updateDisplay("UID: " + uid);
 
-  // char key = keypad.getKey();
+        // Validate UID
+        if (uid != UID_SPACE1 && uid != UID_SPACE2 && uid != UID_MASTER) {
+            updateDisplay("The RFID card is unknown");
+            Serial.println("RFID: Unknown card");
+            return; // Exit RFID handling for unknown cards
+        }
 
-  // if (key){
-  //   Serial.println(key);
+        bool actionTaken = false;
 
-  //   if(key == '*') {
-  //     input_password = ""; // clear input password
-  //   } else if(key == '#') {
-  //     if(password == input_password) {
-  //       Serial.println("password is correct, here num: ");
-  //       // DO YOUR WORK HERE
-  //       int numbah = spaces[1].getNumber();
-  //       Serial.println(String(numbah));
-        
-  //     } else {
-  //       Serial.println("password is incorrect, try again");
-  //     }
+        // Handle unlocking (specific UID or MASTER)
+        if (space1.locked && (space1.associatedUID == uid || uid == UID_MASTER)) {
+            space1.startUnlocking();
+            actionTaken = true;
+            Serial.println("Space 1: Unlocking initiated");
+        }
+        else if (space2.locked && (space2.associatedUID == uid || uid == UID_MASTER)) {
+            space2.startUnlocking();
+            actionTaken = true;
+            Serial.println("Space 2: Unlocking initiated");
+        }
 
-  //     input_password = ""; // clear input password
-  //   } else {
-  //     input_password += key; // append new character to input password string
-  //   }
-  // }
+        // Handle locking (only specific UIDs, not MASTER)
+        if (!actionTaken && uid != UID_MASTER) {
+            if (uid == UID_SPACE1 && space1.occupied && !space1.locked && !space1.lockingInProgress) {
+                space1.associateUID(uid);
+                space1.startLocking();
+                actionTaken = true;
+                Serial.println("Space 1: Locking initiated");
+            }
+            else if (uid == UID_SPACE2 && space2.occupied && !space2.locked && !space2.lockingInProgress) {
+                space2.associateUID(uid);
+                space2.startLocking();
+                actionTaken = true;
+                Serial.println("Space 2: Locking initiated");
+            }
+            else {
+                // Provide feedback if locking conditions aren't met
+                space1.checkIR();
+                space2.checkIR();
+                bool oneIRSpace1 = digitalRead(space1.A_IR_pin) == LOW || digitalRead(space1.B_IR_pin) == LOW;
+                bool oneIRSpace2 = digitalRead(space2.A_IR_pin) == LOW || digitalRead(space2.B_IR_pin) == LOW;
+                if ((oneIRSpace1 && !space1.locked) || (oneIRSpace2 && !space2.locked)) {
+                    updateDisplay("Please readjust bike");
+                    Serial.println("RFID: Please readjust bike");
+                }
+                else if (!space1.occupied && !space2.occupied) {
+                    updateDisplay("No bike detected");
+                    Serial.println("RFID: No bike detected");
+                }
+            }
+        }
+    }
 }
