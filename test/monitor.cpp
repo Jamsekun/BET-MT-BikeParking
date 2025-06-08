@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <LoRa.h>
 #include <SPI.h>
+#include <WiFi.h>
 
 // Pin definitions
 #define LORA_CS   10  // LoRa chip select
@@ -18,7 +19,11 @@
 #define RGB2_GREEN 5  // Space 2 RGB Green
 #define RGB2_BLUE  6  // Space 2 RGB Blue
 
+// WiFi credentials
+const char* ssid = "OPPO_A78";
+const char* password = "s7dg6zmy";
 
+WiFiServer server(80);
 
 class ParkingSpace {
 public:
@@ -99,9 +104,9 @@ public:
             unsigned long currentTime = millis();
             if (currentTime - lastBlinkTime >= blinkInterval) {
                 blinkState = !blinkState;
-                digitalWrite(redPin, blinkState ? HIGH : LOW);    // Orange: Red + Green
-                digitalWrite(greenPin, blinkState ? HIGH : LOW);
-                digitalWrite(bluePin, LOW);
+                digitalWrite(redPin, LOW);    // Orange: Red + Green
+                digitalWrite(bluePin, blinkState ? HIGH : LOW);
+                digitalWrite(greenPin, LOW);
                 lastBlinkTime = currentTime;
                 Serial.print("Space ");
                 Serial.print(spaceNumber);
@@ -142,8 +147,21 @@ ParkingSpace space2(2, RGB2_RED, RGB2_GREEN, RGB2_BLUE);
 
 void setup() {
     Serial.begin(115200);
-    while (!Serial) delay(10); // Wait for Serial
+    // while (!Serial) delay(10); // Wait for Serial
     Serial.println("LoRa Receiver starting...");
+
+    // Connect to WiFi
+    WiFi.begin(ssid, password);
+    Serial.print("Connecting to WiFi");
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    
+    Serial.println();
+    Serial.print("Connected, IP address: ");
+    Serial.println(WiFi.localIP());
+    server.begin();
 
     // Initialize status LEDs and buzzer
     pinMode(RED_LED, OUTPUT);
@@ -246,14 +264,73 @@ void handleSerialCommand() {
     }
 }
 
+void handleWiFiClient() {
+    WiFiClient client = server.available();
+    if (!client) return;
+
+    String request = client.readStringUntil('\r');
+    client.println("HTTP/1.1 200 OK");
+    client.println("Content-Type: text/html");
+    client.println("Connection: close");
+    client.println();
+
+    // Space 1: Control both actuators A and B
+    if (request.indexOf("/space1/available") != -1) {
+        space1.updateStatus("available");
+
+    }
+    else if (request.indexOf("/space1/occupied") != -1){
+        space1.updateStatus("occupied");
+    }
+    else if (request.indexOf("/space1/stolen") != -1){
+        space1.updateStatus("stolen");
+    }
+    else if (request.indexOf("/space2/available") != -1) {
+            space2.updateStatus("available");
+    }
+    else if (request.indexOf("/space2/occupied") != -1){
+        space2.updateStatus("occupied");
+    }
+    else if (request.indexOf("/space2/stolen") != -1){
+        space2.updateStatus("stolen");
+    }
+
+    // Serve HTML page
+    client.println("<!DOCTYPE html><html><head><title>Monitoring Panel Control</title>");
+    client.println("<link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/bulma/0.9.3/css/bulma.min.css'>");
+    client.println("<style>body { padding: 40px; } .control-group { margin-bottom: 40px; } .button { margin: 15px; }</style>");
+    client.println("</head><body><div class='container'><h1 class='title'>Monitoring Control</h1>");
+
+    // Space 1 controls
+    client.println("<div class='control-group'><h2 class='subtitle'>Space 1 Control</h2>");
+    client.println("<a class='button is-primary' href='/space1/available'>AVAILABLE</a>");
+    client.println("<a class='button is-warning' href='/space1/occupied'>OCCUPIED</a>");
+    client.println("<a class='button is-danger' href='/space1/stolen'>STOLEN</a></div>");
+
+    // Space 2 controls
+    client.println("<div class='control-group'><h2 class='subtitle'>Space 2 Control</h2>");
+    client.println("<a class='button is-primary' href='/space2/available'>AVAILABLE</a>");
+    client.println("<a class='button is-warning' href='/space2/occupied'>OCCUPIED</a>");
+    client.println("<a class='button is-danger' href='/space2/stolen'>STOLEN</a></div>");
+
+    client.println("</div></body></html>");
+    client.stop();
+}
+
 void loop() {
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        digitalWrite(RGB1_BLUE, HIGH);
+    }
+
     // Track buzzer state
     bool buzzerActive = false;
 
     // Update LED blinking and buzzer for stolen state
     space1.update(buzzerActive);
     space2.update(buzzerActive);
-    handleSerialCommand();
+    // handleSerialCommand();
+    handleWiFiClient();
 
     // Control buzzer (only one space’s buzzer is active at a time)
     static bool lastBuzzerState = false;
